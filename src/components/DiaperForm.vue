@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { DiaperType } from '../types'
+import { fromDateTimeLocalValue, toDateTimeLocalValue } from '../utils/time'
 
 const emit = defineEmits<{
-  save: [payload: { type: DiaperType; poopColor: string | null; poopTexture: string | null; notes: string }]
+  save: [payload: { type: DiaperType; time: number; poopColor: string | null; poopTexture: string | null; notes: string }]
   done: []
 }>()
 
 const savedType = ref<DiaperType | null>(null)
+const timeValue = ref(toDateTimeLocalValue(Date.now()))
 const poopColor = ref<string | null>(null)
 const poopTexture = ref<string | null>(null)
 const notes = ref('')
@@ -15,10 +17,14 @@ const notes = ref('')
 const colorOptions = ['黄色', '金黄', '绿色', '棕色', '偏白', '带血丝']
 const textureOptions = ['稀水样', '糊状', '软便', '成形', '干硬']
 
+function currentTime(): number {
+  return fromDateTimeLocalValue(timeValue.value) ?? Date.now()
+}
+
 function pick(type: DiaperType) {
   // 点选即保存；便便类可继续补填性状
   savedType.value = type
-  emit('save', { type, poopColor: null, poopTexture: null, notes: '' })
+  emit('save', { type, time: currentTime(), poopColor: null, poopTexture: null, notes: '' })
   if (type === 'pee') {
     emit('done')
   }
@@ -28,6 +34,7 @@ function saveDetail() {
   if (!savedType.value) return
   emit('save', {
     type: savedType.value,
+    time: currentTime(),
     poopColor: poopColor.value,
     poopTexture: poopTexture.value,
     notes: notes.value.trim(),
@@ -39,6 +46,10 @@ function saveDetail() {
 <template>
   <div>
     <template v-if="!savedType">
+      <div class="field">
+        <label>时间</label>
+        <input v-model="timeValue" type="datetime-local" />
+      </div>
       <div class="type-grid">
         <button class="type-btn" @click="pick('pee')">💧<span>嘘嘘</span></button>
         <button class="type-btn" @click="pick('poop')">💩<span>便便</span></button>

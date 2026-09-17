@@ -12,6 +12,7 @@ import AppModal from '../components/AppModal.vue'
 import BottleFeedForm from '../components/BottleFeedForm.vue'
 import DiaperForm from '../components/DiaperForm.vue'
 import SleepTypePicker from '../components/SleepTypePicker.vue'
+import SleepEntry from '../components/SleepEntry.vue'
 
 const baby = ref<BabyProfile | null>(null)
 const feedCount = ref(0)
@@ -25,6 +26,7 @@ const { showToast } = useToast()
 const showBottle = ref(false)
 const showDiaper = ref(false)
 const showSleepType = ref(false)
+const showSleepEntry = ref(false)
 let lastDiaperId: number | null = null
 const finishedSleep = ref<{ startTime: number; endTime: number } | null>(null)
 
@@ -65,6 +67,19 @@ function toggleTimer(kind: TimerKind) {
   }
 }
 
+function onSleepButton() {
+  if (isRunning('sleep')) {
+    void finishTimer()
+  } else if (!active.value) {
+    showSleepEntry.value = true
+  }
+}
+
+function startSleepTimer(startTime: number) {
+  start('sleep', startTime)
+  showSleepEntry.value = false
+}
+
 async function finishTimer() {
   const finished = stop()
   if (!finished) return
@@ -95,6 +110,13 @@ async function saveSleepType(type: 'nap' | 'night') {
   await refresh()
 }
 
+async function saveSleepManual(payload: { startTime: number; endTime: number; type: 'nap' | 'night' }) {
+  await sleepRepo.add({ ...payload, notes: '' })
+  showSleepEntry.value = false
+  showToast('已保存睡眠记录 ✓')
+  await refresh()
+}
+
 async function saveBottle(payload: { type: FeedingType; startTime: number; amountMl: number; notes: string }) {
   await feedingRepo.add({
     type: payload.type,
@@ -115,15 +137,22 @@ function openDiaper() {
 
 async function onDiaperSave(payload: {
   type: DiaperType
+  time: number
   poopColor: string | null
   poopTexture: string | null
   notes: string
 }) {
   if (lastDiaperId == null) {
-    lastDiaperId = await diaperRepo.add({ ...payload, time: Date.now() })
+    lastDiaperId = await diaperRepo.add({ ...payload })
     showToast('已保存换尿布记录 ✓')
   } else {
-    await diaperRepo.update(lastDiaperId, payload)
+    // 补充性状：不覆盖首次保存时选择的时间
+    await diaperRepo.update(lastDiaperId, {
+      type: payload.type,
+      poopColor: payload.poopColor,
+      poopTexture: payload.poopTexture,
+      notes: payload.notes,
+    })
     showToast('已补充记录 ✓')
   }
   await refresh()
@@ -201,7 +230,7 @@ onMounted(async () => {
         class="btn secondary quick-btn"
         :class="{ running: isRunning('sleep') }"
         :disabled="!!active && !isRunning('sleep')"
-        @click="toggleTimer('sleep')"
+        @click="onSleepButton"
       >
         {{ isRunning('sleep') ? '😴 睡眠中' : '😴 宝宝睡着了' }}
       </button>
@@ -220,6 +249,10 @@ onMounted(async () => {
         :duration-text="finishedSleep ? formatDuration(finishedSleep.endTime - finishedSleep.startTime) : ''"
         @save="saveSleepType"
       />
+    </AppModal>
+
+    <AppModal :open="showSleepEntry" title="记录睡眠" @close="showSleepEntry = false">
+      <SleepEntry @start="startSleepTimer" @manual-save="saveSleepManual" />
     </AppModal>
   </div>
 </template>
@@ -319,7 +352,7 @@ onMounted(async () => {
 
 .btn.running {
   background: var(--color-primary-dark);
-  animation: pulse 1.2s infinite;
+  color: #fff;
 }
 
 .btn:disabled {

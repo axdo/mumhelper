@@ -56,8 +56,8 @@ export function useActiveTimer() {
 
   const elapsedMs = computed(() => (active.value ? now.value - active.value.startTime : 0))
 
-  function start(kind: TimerKind) {
-    active.value = { kind, startTime: Date.now() }
+  function start(kind: TimerKind, startTime: number = Date.now()) {
+    active.value = { kind, startTime: Math.min(startTime, Date.now()) }
     persist()
   }
 
