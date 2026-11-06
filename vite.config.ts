@@ -14,7 +14,7 @@ export default defineConfig({
       manifest: {
         name: '妈妈帮手',
         short_name: '妈妈帮手',
-        description: '新手妈妈的母婴记录小助手：喂养、尿布、睡眠记录与统计',
+        description: '记录喂奶开始与结束时间的小工具',
         lang: 'zh-CN',
         theme_color: '#e8836b',
         background_color: '#fff8f4',

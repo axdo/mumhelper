@@ -1,259 +1,86 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
-import type { BabyProfile, DiaperType, FeedingType } from '../types'
-import { babyRepo } from '../repositories/babyRepo'
+import type { FeedingRecord } from '../types'
 import { feedingRepo } from '../repositories/feedingRepo'
-import { diaperRepo } from '../repositories/diaperRepo'
-import { sleepRepo } from '../repositories/sleepRepo'
-import { useActiveTimer, type TimerKind } from '../composables/useActiveTimer'
 import { useToast } from '../composables/useToast'
-import { babyAgeDays, formatDuration, formatElapsed, startOfToday } from '../utils/time'
-import AppModal from '../components/AppModal.vue'
-import BottleFeedForm from '../components/BottleFeedForm.vue'
-import DiaperForm from '../components/DiaperForm.vue'
-import SleepTypePicker from '../components/SleepTypePicker.vue'
-import SleepEntry from '../components/SleepEntry.vue'
+import { formatDuration, formatTime, fromDateTimeLocalValue, startOfToday, toDateTimeLocalValue } from '../utils/time'
 
-const baby = ref<BabyProfile | null>(null)
-const feedCount = ref(0)
-const totalMl = ref(0)
-const diaperCount = ref(0)
-const sleepMinutes = ref(0)
-
-const { active, elapsedMs, start, stop, isRunning } = useActiveTimer()
 const { showToast } = useToast()
 
-const showBottle = ref(false)
-const showDiaper = ref(false)
-const showSleepType = ref(false)
-const showSleepEntry = ref(false)
-let lastDiaperId: number | null = null
-const finishedSleep = ref<{ startTime: number; endTime: number } | null>(null)
+const startValue = ref(toDateTimeLocalValue(Date.now() - 1800000))
+const endValue = ref(toDateTimeLocalValue(Date.now()))
+const records = ref<FeedingRecord[]>([])
 
-const babyTitle = computed(() => {
-  if (!baby.value) return '妈妈帮手'
-  const name = baby.value.name || '宝宝'
-  if (baby.value.birthDate) return `${name} · 第 ${babyAgeDays(baby.value.birthDate)} 天`
-  return name
-})
+const startTime = computed(() => fromDateTimeLocalValue(startValue.value))
+const endTime = computed(() => fromDateTimeLocalValue(endValue.value))
+const invalid = computed(() => !startTime.value || !endTime.value || endTime.value <= startTime.value)
+const durationText = computed(() =>
+  invalid.value ? '' : formatDuration(endTime.value! - startTime.value!),
+)
 
-const elapsedText = computed(() => formatElapsed(elapsedMs.value))
-
-const timerLabel: Record<TimerKind, string> = {
-  breast_left: '左侧亲喂中',
-  breast_right: '右侧亲喂中',
-  sleep: '宝宝睡觉中',
-}
+const totalMinutes = computed(() =>
+  Math.round(records.value.reduce((sum, r) => sum + (r.endTime - r.startTime), 0) / 60000),
+)
 
 async function refresh() {
   const from = startOfToday()
-  const to = from + 86400000
-  const [feedings, diapers, sleeps] = await Promise.all([
-    feedingRepo.listByRange(from, to),
-    diaperRepo.listByRange(from, to),
-    sleepRepo.listByRange(from, to),
-  ])
-  feedCount.value = feedings.length
-  totalMl.value = feedings.reduce((sum, f) => sum + (f.amountMl ?? 0), 0)
-  diaperCount.value = diapers.length
-  sleepMinutes.value = Math.round(sleeps.reduce((sum, s) => sum + (s.endTime - s.startTime), 0) / 60000)
+  records.value = await feedingRepo.listByRange(from, from + 86400000)
 }
 
-function toggleTimer(kind: TimerKind) {
-  if (isRunning(kind)) {
-    void finishTimer()
-  } else if (!active.value) {
-    start(kind)
-  }
-}
-
-function onSleepButton() {
-  if (isRunning('sleep')) {
-    void finishTimer()
-  } else if (!active.value) {
-    showSleepEntry.value = true
-  }
-}
-
-function startSleepTimer(startTime: number) {
-  start('sleep', startTime)
-  showSleepEntry.value = false
-}
-
-async function finishTimer() {
-  const finished = stop()
-  if (!finished) return
-  if (finished.kind === 'sleep') {
-    finishedSleep.value = { startTime: finished.startTime, endTime: Date.now() }
-    showSleepType.value = true
-    return
-  }
-  const minutes = Math.max(1, Math.round((Date.now() - finished.startTime) / 60000))
-  await feedingRepo.add({
-    type: finished.kind,
-    startTime: finished.startTime,
-    minutes,
-    amountMl: null,
-    notes: '',
-  })
+async function save() {
+  if (invalid.value) return
+  await feedingRepo.add({ startTime: startTime.value!, endTime: endTime.value! })
+  startValue.value = toDateTimeLocalValue(Date.now() - 1800000)
+  endValue.value = toDateTimeLocalValue(Date.now())
   showToast('已保存喂奶记录 ✓')
   await refresh()
 }
 
-async function saveSleepType(type: 'nap' | 'night') {
-  if (finishedSleep.value) {
-    await sleepRepo.add({ ...finishedSleep.value, type, notes: '' })
-    finishedSleep.value = null
-    showToast('已保存睡眠记录 ✓')
-  }
-  showSleepType.value = false
+async function remove(id: number) {
+  if (!window.confirm('删除这条记录？')) return
+  await feedingRepo.remove(id)
+  showToast('已删除')
   await refresh()
 }
 
-async function saveSleepManual(payload: { startTime: number; endTime: number; type: 'nap' | 'night' }) {
-  await sleepRepo.add({ ...payload, notes: '' })
-  showSleepEntry.value = false
-  showToast('已保存睡眠记录 ✓')
-  await refresh()
-}
-
-async function saveBottle(payload: { type: FeedingType; startTime: number; amountMl: number; notes: string }) {
-  await feedingRepo.add({
-    type: payload.type,
-    startTime: payload.startTime,
-    minutes: null,
-    amountMl: payload.amountMl,
-    notes: payload.notes,
-  })
-  showBottle.value = false
-  showToast('已保存瓶喂记录 ✓')
-  await refresh()
-}
-
-function openDiaper() {
-  lastDiaperId = null
-  showDiaper.value = true
-}
-
-async function onDiaperSave(payload: {
-  type: DiaperType
-  time: number
-  poopColor: string | null
-  poopTexture: string | null
-  notes: string
-}) {
-  if (lastDiaperId == null) {
-    lastDiaperId = await diaperRepo.add({ ...payload })
-    showToast('已保存换尿布记录 ✓')
-  } else {
-    // 补充性状：不覆盖首次保存时选择的时间
-    await diaperRepo.update(lastDiaperId, {
-      type: payload.type,
-      poopColor: payload.poopColor,
-      poopTexture: payload.poopTexture,
-      notes: payload.notes,
-    })
-    showToast('已补充记录 ✓')
-  }
-  await refresh()
-}
-
-onMounted(async () => {
-  baby.value = (await babyRepo.get()) ?? null
-  await refresh()
-})
+onMounted(refresh)
 </script>
 
 <template>
   <div class="page">
     <header class="home-header">
-      <h1 class="baby-name">{{ babyTitle }}</h1>
+      <h1 class="baby-name">🍼 喂奶记录</h1>
       <p class="sub-text">{{ new Date().toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }) }}</p>
     </header>
 
-    <section class="card overview">
-      <h2 class="card-title">今日概览</h2>
-      <div class="stats-grid">
-        <div class="stat">
-          <span class="stat-value">{{ feedCount }}</span>
-          <span class="stat-label">喂奶次数</span>
-          <span v-if="totalMl > 0" class="stat-extra">{{ totalMl }} ml</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value">{{ diaperCount }}</span>
-          <span class="stat-label">换尿布</span>
-        </div>
-        <div class="stat">
-          <span class="stat-value">{{ formatDuration(sleepMinutes * 60000) }}</span>
-          <span class="stat-label">睡眠时长</span>
-        </div>
+    <section class="card">
+      <div class="field">
+        <label>开始时间</label>
+        <input v-model="startValue" type="datetime-local" />
       </div>
-    </section>
-
-    <section v-if="active" class="card timer-card">
-      <div class="timer-info">
-        <span class="timer-dot" />
-        <span class="timer-label">{{ timerLabel[active.kind] }}</span>
-        <span class="timer-value">{{ elapsedText }}</span>
+      <div class="field">
+        <label>结束时间</label>
+        <input v-model="endValue" type="datetime-local" />
       </div>
-      <button class="btn block" @click="finishTimer">
-        {{ active.kind === 'sleep' ? '宝宝醒了' : '结束喂奶' }}
-      </button>
+      <p v-if="invalid" class="error-hint">结束时间需要晚于开始时间</p>
+      <p v-else class="sub-text duration-hint">本次喂奶 {{ durationText }}</p>
+      <button class="btn block" :disabled="invalid" @click="save">保存</button>
     </section>
 
     <section class="card">
-      <h2 class="card-title">喂奶</h2>
-      <div class="btn-grid">
-        <button
-          class="btn feed-btn"
-          :class="{ running: isRunning('breast_left'), secondary: !!active && !isRunning('breast_left') }"
-          :disabled="!!active && !isRunning('breast_left')"
-          @click="toggleTimer('breast_left')"
-        >
-          🤱 亲喂左
-        </button>
-        <button
-          class="btn feed-btn"
-          :class="{ running: isRunning('breast_right'), secondary: !!active && !isRunning('breast_right') }"
-          :disabled="!!active && !isRunning('breast_right')"
-          @click="toggleTimer('breast_right')"
-        >
-          🤱 亲喂右
-        </button>
-        <button class="btn secondary feed-btn" :disabled="!!active" @click="showBottle = true">🍼 瓶喂</button>
-      </div>
+      <h2 class="card-title">今日记录</h2>
+      <p v-if="records.length" class="sub-text summary">
+        共 {{ records.length }} 次 · {{ formatDuration(totalMinutes * 60000) }}
+      </p>
+      <p v-if="!records.length" class="empty-hint">今天还没有记录</p>
+      <ul v-else class="record-list">
+        <li v-for="r in records" :key="r.id" class="record-item">
+          <span class="record-time">{{ formatTime(r.startTime) }} – {{ formatTime(r.endTime) }}</span>
+          <span class="record-duration">{{ formatDuration(r.endTime - r.startTime) }}</span>
+          <button class="delete-btn" @click="remove(r.id!)">删除</button>
+        </li>
+      </ul>
     </section>
-
-    <section class="quick-row">
-      <button class="btn secondary quick-btn" :disabled="!!active" @click="openDiaper">🧷 换尿布</button>
-      <button
-        class="btn secondary quick-btn"
-        :class="{ running: isRunning('sleep') }"
-        :disabled="!!active && !isRunning('sleep')"
-        @click="onSleepButton"
-      >
-        {{ isRunning('sleep') ? '😴 睡眠中' : '😴 宝宝睡着了' }}
-      </button>
-    </section>
-
-    <AppModal :open="showBottle" title="瓶喂记录" @close="showBottle = false">
-      <BottleFeedForm @save="saveBottle" />
-    </AppModal>
-
-    <AppModal :open="showDiaper" title="换尿布" @close="showDiaper = false">
-      <DiaperForm @save="onDiaperSave" @done="showDiaper = false" />
-    </AppModal>
-
-    <AppModal :open="showSleepType" title="这次算哪种睡眠？" @close="showSleepType = false">
-      <SleepTypePicker
-        :duration-text="finishedSleep ? formatDuration(finishedSleep.endTime - finishedSleep.startTime) : ''"
-        @save="saveSleepType"
-      />
-    </AppModal>
-
-    <AppModal :open="showSleepEntry" title="记录睡眠" @close="showSleepEntry = false">
-      <SleepEntry @start="startSleepTimer" @manual-save="saveSleepManual" />
-    </AppModal>
   </div>
 </template>
 
@@ -273,99 +100,60 @@ onMounted(async () => {
   margin-bottom: 12px;
 }
 
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
+.duration-hint {
   text-align: center;
-}
-
-.stat {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.stat-value {
-  font-size: 1.3rem;
-  font-weight: 700;
-  color: var(--color-primary-dark);
-}
-
-.stat-label {
-  font-size: 0.85rem;
-  color: var(--color-text-sub);
-}
-
-.stat-extra {
-  font-size: 0.8rem;
-  color: var(--color-text-sub);
-}
-
-.timer-card {
-  border: 2px solid var(--color-primary);
-}
-
-.timer-info {
-  display: flex;
-  align-items: center;
-  gap: 8px;
   margin-bottom: 12px;
 }
 
-.timer-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: var(--color-primary);
-  animation: pulse 1.2s infinite;
+.error-hint {
+  text-align: center;
+  color: #c62828;
+  font-size: 0.9rem;
+  margin-bottom: 12px;
 }
 
-@keyframes pulse {
-  50% {
-    opacity: 0.3;
-  }
+.summary {
+  margin-bottom: 10px;
 }
 
-.timer-label {
+.record-list {
+  list-style: none;
+}
+
+.record-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.record-item:last-child {
+  border-bottom: none;
+}
+
+.record-time {
+  font-size: 1.05rem;
   font-weight: 600;
+  font-variant-numeric: tabular-nums;
   flex: 1;
 }
 
-.timer-value {
-  font-size: 1.4rem;
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-  color: var(--color-primary-dark);
+.record-duration {
+  color: var(--color-text-sub);
+  font-size: 0.9rem;
 }
 
-.btn-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 8px;
-}
-
-.feed-btn {
-  padding: 14px 6px;
-  font-size: 0.95rem;
-}
-
-.btn.running {
-  background: var(--color-primary-dark);
-  color: #fff;
+.delete-btn {
+  border: none;
+  background: transparent;
+  color: #c62828;
+  font-size: 0.9rem;
+  padding: 6px 8px;
+  cursor: pointer;
 }
 
 .btn:disabled {
-  opacity: 0.45;
-}
-
-.quick-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
-}
-
-.quick-btn {
-  font-size: 1.05rem;
+  opacity: 0.5;
 }
 </style>

@@ -21,8 +21,4 @@ export const feedingRepo = {
   async listByRange(from: number, to: number): Promise<FeedingRecord[]> {
     return db.feedings.where('startTime').between(from, to, true, false).reverse().toArray()
   },
-
-  async listAll(): Promise<FeedingRecord[]> {
-    return db.feedings.orderBy('startTime').reverse().toArray()
-  },
 }
